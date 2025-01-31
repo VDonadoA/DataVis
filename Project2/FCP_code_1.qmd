@@ -1,0 +1,285 @@
+---
+title: "FCP Valentina Donado"
+format: html
+---
+
+# Load libraries
+
+```{r}
+library(tidyverse)
+library(maps)
+library(ggplot2)
+library(ggthemes)
+```
+
+# Set up the theme
+
+```{r}
+theme_set(theme_minimal())
+```
+
+# Load data
+The dataset contains 992 cases― businesses that have received the EO50 certificate―and 16 variables, 
+including the timestamp of the EO50 approval date and location data.
+
+```{r}
+data= read.csv("e050.csv")
+head(data)
+```
+
+# Cleaning and preparing dataset 
+
+```{r}
+# Filter data so it only includes new york state and gets rid of empty and Na boroughs
+data <- data %>%
+  filter(Business.State == "New York" & !is.na(Borough) & Borough != "")
+
+# Make sure approval date has right formatting for further manipulation 
+data$EO50.Approval.Date <- as.Date(data$EO50.Approval.Date, format = "%m/%d/%Y")
+
+head(data)
+```
+
+```{r}
+# Add Year column and count the number of certificates by year and borough
+data <- data %>%
+  mutate(Year = format(EO50.Approval.Date, "%Y"))
+
+Certificate_count <- data %>%
+  group_by(Year, Borough) %>%
+  summarise(Certificates = n())
+
+head(Certificate_count)
+```
+
+## Part 1: Visualize the diffusion of EO50 certificates over time
+```{r}
+g = ggplot(Certificate_count, aes(x = Year, y = Certificates, color = Borough, group = Borough)) +
+  geom_line(size = 1) +
+  scale_color_manual(values = c("darkgreen", "blue", "darkorange", "red","blueviolet")) +
+  geom_point(size = 2) +
+  labs(
+    title = "Diffusion of EO50 Certificates Over Time",
+    x = NULL,
+    y = "Number of Certificates",
+    color = "Borough"
+  ) +
+  theme_minimal()
+
+print(g)
+```
+
+# --- Decided to focus on years 2022 and 2023 given that they both contain 12 months so the time series will display 
+# --- amount of certificates per quarter to visualize behavior in those years
+
+
+# Cleaning and preparing dataset 
+
+```{r}
+# Create a Month-Year column
+data <- data %>%
+  mutate(Month_Year = format(EO50.Approval.Date, "%Y-%m"))  # Format as "Year-Month"
+
+# Create quarter column
+data <- data %>%
+  mutate(
+    Year = as.numeric(format(EO50.Approval.Date, "%Y")),  # Extract year
+    Quarter = paste0("Q", quarter(EO50.Approval.Date)),  # Extract quarter
+    Quarter_Year = paste0(Year, "-", Quarter)  # Combine year and quarter
+  )
+
+# Filter to exclude 2021 and 2024
+data_filtered <- data %>%
+  filter(Year != 2021 & Year != 2024)
+
+# Count certificates by Month-Year and Borough
+Certificate_count_quarter <- data_filtered %>%
+  group_by(Quarter_Year, Borough) %>%
+  summarise(Certificates = n())
+
+# Convert Quarter-Year to an ordered factor for proper plotting
+Certificate_count_quarter$Quarter_Year <- factor(Certificate_count_quarter$Quarter_Year,
+  levels = unique(Certificate_count_quarter$Quarter_Year[order(Certificate_count_quarter$Quarter_Year)])
+)
+```
+
+# Visualize difussion of certificates across 2022 and 2023
+
+```{r}
+g_1 = ggplot(Certificate_count_quarter, aes(x = Quarter_Year, y = Certificates, color = Borough, group = Borough)) +
+  geom_line(size = 1) +
+  scale_color_manual(values = c("darkgreen", "blue", "darkorange", "red", "blueviolet")) +
+  geom_point(size = 2) +
+  labs(
+    title = "Diffusion of EO50 Certificates Over Time (by Quarter)",
+    x = NULL,
+    y = "Number of Certificates",
+    color = "Borough"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels
+  )
+print(g_1)
+```
+
+
+## Part2: Visualize the diffusion of EO50 certificates across NYC areas 
+
+# Create a map of NYC with its boundaries
+
+```{r}
+install.packages('sf')
+library(sf)
+```
+
+```{r}
+# Load map data 
+nyc = st_read('Borough Boundaries.geojson')
+
+# Ensure eo05 data is sf object to visualize in map
+data_sf = data
+data_sf = data_sf %>%
+        filter(!is.na(Borough), !is.na(Longitude))
+
+data_sf = st_as_sf(data_sf, coords=c('Longitude', 'Latitude'), crs=4326)
+
+head(data_sf)
+```
+
+```{r}
+# Ensure both datas are in the same coordinate system 
+st_crs(nyc)
+st_crs(data_sf)
+```
+
+# Visualise map and plot amount of certificates per borough and facet years to see behavior in through time
+
+```{r}
+g2= ggplot() +
+  geom_sf(data = nyc, fill = "grey95", color = "grey50", alpha = 0.5) +
+  geom_sf(data = data_sf, aes(color=Borough),size = 0.7, alpha = 0.7) +
+  coord_sf(crs= st_crs(5070))+
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  labs(title = "EO50 Certificates Across NYC") +
+  scale_color_brewer(palette = "Set1", name = "Borough")+
+  facet_wrap(~Year, ncol = 2)
+
+print(g2)
+```
+
+
+# Incorporate NYC hate crime data
+```{r}
+#read file
+hate_crime_data <- read.csv("NYPD_HateCrimes.csv")
+
+#rename columns
+names(hate_crime_data)[names(hate_crime_data) == "County"] <- "subregion"
+names(hate_crime_data)[names(hate_crime_data) == "Complaint.Year.Number"] <- "Year"
+hate_crime_data$subregion <- tolower(hate_crime_data$subregion)
+
+#create subset with data we actually need
+hate_crime_data_1 <- hate_crime_data %>% filter(Year %in% c(2022, 2023))
+hate_crime_data_1 <- subset(hate_crime_data_1, select = c(Full.Complaint.ID,Year,subregion))
+
+# Calculate hate crime count per year per borough
+Crime_Data <- hate_crime_data_1 %>%
+  group_by(subregion, Year) %>%
+  summarise(Hate_Crime_Count = n())
+
+head(Crime_Data)
+```
+
+# Merge hate crime data with NYC map
+
+```{r}
+# Make sure boroughs are written the same and both tables have the same rubregion column
+names(nyc)[names(nyc) == "boro_name"] <- "subregion"
+nyc$subregion <- tolower(nyc$subregion)
+
+nyc <- nyc %>%
+  mutate(subregion = case_when(
+    subregion == "manhattan" ~ "new york",
+    subregion == "staten island" ~ "richmond",
+    subregion == "brooklyn" ~ "kings",
+    TRUE ~ subregion
+  ))
+
+# Merge the datas
+nyc <- nyc %>%
+  left_join(Crime_Data, by = "subregion")
+
+head(nyc)
+```
+
+# Incorporate NYC population data
+```{r}
+# Load population data
+population_data <- read.csv("NYC_Population.csv")
+
+# Ensure borough column is names the same
+names(population_data)[names(population_data) == "Borough"] <- "subregion"
+
+head(population_data)
+```
+
+# Merge population data with NYC map
+```{r}
+# Merge
+nyc <- nyc %>%
+  left_join(population_data, by = c("subregion", "Year"))
+
+head(nyc)
+```
+
+# Calculate Hate Crime to Population Ratio to be able to compare apples to apples across boroughs
+
+```{r}
+nyc$Hate_Crime_Ratio <- nyc$Hate_Crime_Count / nyc$Population
+
+head(nyc)
+```
+
+# Calculate hate crimes per 100,000 people for better understanding
+
+```{r}
+nyc <- nyc %>%
+  mutate(Hate_Crime_Ratio_Per100K = (Hate_Crime_Count / Population) * 100000)
+
+head(nyc)
+```
+
+# Filter years to focus on only those we are interested in
+
+ ```{r}
+nyc_filtered <- nyc %>% filter(Year %in% c(2022, 2023))
+data_sf_filtered <- data_sf %>% filter(Year %in% c(2022, 2023))
+```
+
+
+# visualize the plot
+```{r}
+g4 = ggplot() +
+  # Polygon layer for boroughs
+  geom_sf(data = nyc_filtered, aes(fill = Hate_Crime_Ratio_Per100K), color = "black", size = 0.5) +
+
+  # Point layer for EO50 certificates
+  geom_sf(data = data_sf_filtered, color = "black", alpha = 0.6, size = 1) +
+
+  # Coordinate mapping and color scaling
+  coord_sf(crs= st_crs(5070)) + 
+                                                       
+  scale_fill_gradient( name = "Hate Crimes", low = "white", high = "darkred") +
+  
+  labs(title = "Hate Crimes per 100K Population Across NYC Boroughs (2021–2024)", x = NULL, y = NULL) +
+
+  theme_minimal(base_size = 14) +
+  theme(panel.grid = element_blank())+
+
+  # Facet by year
+  facet_wrap(~Year, ncol = 2)                                           
+
+print(g4)
+```
